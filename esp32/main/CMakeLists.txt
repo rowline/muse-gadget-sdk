@@ -17,6 +17,7 @@ set(GADGET_SRCS
     "app.c"
     "ble_server.c"
     "wifi_mgr.c"
+    "uplink.c"
     "wifi_known.c"
     "identity.c"
     "config_store.c"
@@ -103,3 +104,13 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "../avatar"
     REQUIRES ${GADGET_REQUIRES}
 )
+
+# CONFIG_HOMEHUB_UPLINK_GATEWAY: let lwIP ask main/uplink.c for the next hop
+# of off-subnet packets. Builds without the override leave lwIP untouched.
+if(NOT "${CONFIG_HOMEHUB_UPLINK_GATEWAY}" STREQUAL "")
+    idf_component_get_property(gadget_lwip_lib lwip COMPONENT_LIB)
+    target_compile_definitions(${gadget_lwip_lib} PRIVATE
+        "ESP_IDF_LWIP_HOOK_FILENAME=\"uplink_gateway_hook.h\"")
+    target_include_directories(${gadget_lwip_lib} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/lwip_hooks")
+endif()

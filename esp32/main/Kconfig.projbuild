@@ -50,6 +50,26 @@ menu "ESP32 Device SDK"
             Password for CONFIG_HOMEHUB_WIFI_SSID. Ignored when the SSID
             override is empty.
 
+    config HOMEHUB_UPLINK_GATEWAY
+        string "Internet gateway override"
+        default ""
+        help
+            IPv4 address of a host on the Wi-Fi network to use as the next
+            hop for every address outside the local subnet, for example a
+            computer that forwards and proxies traffic. DHCP still assigns
+            the address, router and lease; only off-subnet packets go to this
+            host, and only while it is inside the DHCP subnet. Leave empty to
+            send them to the DHCP router.
+
+    config HOMEHUB_UPLINK_DNS
+        string "DNS server while the gateway override is active"
+        default ""
+        help
+            IPv4 DNS server used while CONFIG_HOMEHUB_UPLINK_GATEWAY is in
+            effect. Choose one outside the local subnet so lookups also travel
+            through that gateway. It is re-applied after DHCP renewals. Leave
+            empty to keep the DNS server from DHCP.
+
     config HOMEHUB_TOKEN_REFRESH_INTERVAL_DAYS
         int "Proactive device token refresh interval (days, 0 = disabled)"
         range 0 365
