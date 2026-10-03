@@ -21,6 +21,11 @@
 #include "muse_glue.h"
 #endif
 
+// Optional platform start-up, linked in by a wrapper project that hosts this
+// firmware (for example ESP-Mosaico's Vibe Mode services). Runs before Wi-Fi,
+// BLE and the UI start; leave it undefined on stand-alone boards.
+void muse_gadget_platform_start(void) __attribute__((weak));
+
 void app_main(void) {
 #if CONFIG_HOMEHUB_SUPPORT_BUG_REPORT
     if (!diagnostic_log_init()) {
@@ -29,6 +34,9 @@ void app_main(void) {
     }
 #endif
     ESP_LOGI("link.main", CONFIG_GADGET_PRODUCT_NAME " starting");
+    if (muse_gadget_platform_start) {
+        muse_gadget_platform_start();
+    }
 #if CONFIG_MUSE_ENABLED
     muse_glue_start();
 #endif

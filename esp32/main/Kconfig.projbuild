@@ -79,6 +79,16 @@ menu "ESP32 Device SDK"
             Optional OTA parameters in Wi-Fi setup are ignored so provisioning
             can finish normally. Internal builds enable this explicitly.
 
+    config HOMEHUB_OTA_ROLLBACK_GUARD
+        bool "Roll back a new image that can't reach Muse"
+        default y
+        help
+            When the running image is still pending verification, mark it
+            valid once the control connection to Muse comes up, and roll back
+            if that doesn't happen within 5 minutes. Turn this off when another
+            updater accepts images, such as ESP-Mosaico's Vibe Mode: otherwise a
+            freshly installed, not yet paired gadget rolls itself back.
+
     config HOMEHUB_SUPPORT_BUG_REPORT
         bool "Enable private support bug reporting"
         default n

@@ -134,7 +134,9 @@ static uint8_t s_vm_auth_refusals = 0;
 static bool s_vm_auth_refresh_pending = false;
 static atomic_bool s_setup_reset_pending = ATOMIC_VAR_INIT(false);
 static bool s_ble_started = false;
+#if CONFIG_HOMEHUB_OTA_ROLLBACK_GUARD
 static bool s_ota_pending_verify = false;
+#endif
 static uint32_t s_confirm_generation = 0;
 static uint32_t s_confirm_session_generation = 0;
 static TaskHandle_t s_confirm_timeout_task = NULL;
@@ -2395,6 +2397,7 @@ static void on_ws_control_status(const char *status) {
     }
 }
 
+#if CONFIG_HOMEHUB_OTA_ROLLBACK_GUARD
 // Validates a freshly-installed OTA image, or rolls it back. Spawned once at
 // startup. Marking the running image valid (a) commits a PENDING_VERIFY image
 // so the bootloader stops trying to revert it, and (b) blesses a normal boot
@@ -2430,6 +2433,7 @@ static void ota_verify_task(void *arg) {
     stack_monitor_record(NULL);
     vTaskDelete(NULL);
 }
+#endif
 
 // ---- Heap snapshot helper ---------------------------------------------------
 
@@ -2514,6 +2518,7 @@ void app_run(void) {
     noise_ctrl_set_agent_name_cb(led_status_set_title);
     heap_snapshot("after noise_ctrl_init");
 
+#if CONFIG_HOMEHUB_OTA_ROLLBACK_GUARD
     // Arm OTA rollback verification. If the running image was just installed
     // by device.ota it boots as PENDING_VERIFY and must reach the control WS
     // within OTA_VERIFY_TIMEOUT_US, else the bootloader reverts it on reboot.
@@ -2525,6 +2530,7 @@ void app_run(void) {
         ESP_LOGW(TAG, "running a PENDING_VERIFY OTA image; awaiting health check");
     }
     xTaskCreate(ota_verify_task, "ota_verify", 4096, NULL, 4, NULL);
+#endif
 
     bool setup_complete = config_setup_complete();
     bool provisioned = config_is_provisioned();

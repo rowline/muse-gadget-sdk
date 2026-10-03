@@ -69,6 +69,7 @@ class LinkEndpointLifecycleTest(unittest.TestCase):
 #include "vm_api.h"
 #include "diagnostic_log.h"
 #define CONFIG_MUSE_ENABLED 0
+#define CONFIG_HOMEHUB_OTA_ROLLBACK_GUARD 1
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
 #define ESP_OK 0
