@@ -42,6 +42,7 @@
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
 #include "muse_state.h"
+#include "muse_text.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
@@ -109,6 +110,11 @@ static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the n
 static lv_obj_t *s_power_lbl;
 static lv_obj_t *s_caption_lbl;
 static lv_obj_t *s_reply_lbl;   /* full layout: the reply's page while answering */
+/* Captions and replies: unscii_16, falling back to the board's wide font. */
+static lv_font_t s_text_font;
+static lv_font_t s_wide_font;   /* the board's, lifted onto unscii's baseline */
+static const lv_font_t *s_wide_src;
+static int32_t s_wide_lift;
 static lv_obj_t *s_meter[METER_SEGS];
 static lv_obj_t *s_speaker;
 static lv_obj_t *s_speaker_icon;
@@ -442,6 +448,48 @@ static void on_canvas_clicked(lv_event_t *e)
     muse_state_make_happy();
 }
 
+static bool wide_glyph_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc, uint32_t letter, uint32_t next)
+{
+    if (!s_wide_src->get_glyph_dsc(font, dsc, letter, next)) {
+        return false;
+    }
+    dsc->ofs_y += s_wide_lift;
+    return true;
+}
+
+static bool wide_shows(int32_t cp)
+{
+    lv_font_glyph_dsc_t g;
+    return s_wide_src->get_glyph_dsc(s_wide_src, &g, (uint32_t)cp, 0);
+}
+
+/*
+ * unscii_16 with the board's wide font behind it, in the full layout. LVGL
+ * places every glyph on the main font's baseline, at the bottom of unscii's
+ * line, and ideographs reach below theirs, so the wide font's glyphs are
+ * raised to sit on it. Captions keep the curly quotes and dashes it has.
+ */
+static void init_text_font(void)
+{
+    s_text_font = lv_font_unscii_16;
+    s_wide_src = !s_small && muse_board->wide_font ? muse_board->wide_font() : NULL;
+    if (!s_wide_src) {
+        return;
+    }
+    s_wide_font = *s_wide_src;
+    s_wide_font.get_glyph_dsc = wide_glyph_dsc;
+    s_wide_font.fallback = NULL;
+    lv_font_glyph_dsc_t g;
+    if (s_wide_src->get_glyph_dsc(s_wide_src, &g, 0x4E2D, 0)) {   /* an ideograph */
+        int32_t below = -g.ofs_y - lv_font_unscii_16.base_line;
+        s_wide_lift = below > 0 ? below : 0;
+    }
+    s_text_font.fallback = &s_wide_font;
+    muse_text_caption_font(wide_shows);
+    ESP_LOGI(TAG, "wide font: %d px lines, raised %d px", (int)lv_font_get_line_height(s_wide_src),
+             (int)s_wide_lift);
+}
+
 static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compact)
 {
     return s_small ? compact : full;
@@ -665,7 +713,7 @@ static void build_answer(lv_obj_t *face, int ring_in)
         int d = ring_in - spk_r - 4;   /* just inside the ring, even when swollen */
         spk_x = -(int)sqrtf((float)(d * d - spk_y * spk_y));
     }
-    const lv_font_t *font = &lv_font_unscii_16;
+    const lv_font_t *font = &s_text_font;
     int cw = lv_font_get_glyph_width(font, 'M', ' ');
     int pitch = lv_font_get_line_height(font) + CAPTION_LINE_SPACE;
 
@@ -700,8 +748,8 @@ static void build_answer(lv_obj_t *face, int ring_in)
     /* The widest page isn't the biggest: a round screen narrows towards the bottom. */
     for (int c = 12; c <= 24 && fits_across(c * cw, top, ring_in); c++) {
         int n = (reply_bottom(c * cw, ring_in) - top + CAPTION_LINE_SPACE) / pitch;
-        /* A third of the caption spare for characters wider than a byte. */
-        while ((c + 1) * n > MUSE_CAPTION_MAX * 2 / 3) {
+        /* Room in the caption for three bytes a column, as Chinese takes. */
+        while ((c + 1) * n * 3 > MUSE_CAPTION_MAX) {
             n--;
         }
         if (c * n > l->cols * l->lines) {
@@ -869,7 +917,7 @@ static void build_screen(void)
      * these rows, so there's nowhere to put this without covering the face. */
     lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
 
-    s_caption_lbl = make_label(face, font_pick(&lv_font_unscii_16, &lv_font_unscii_8), COLOR_CAPTION);
+    s_caption_lbl = make_label(face, font_pick(&s_text_font, &lv_font_unscii_8), COLOR_CAPTION);
     if (s_small) {
         /* Two lines over the bottom of the face, on a dark band so they stay
          * legible. A tall screen has room to keep them above the mic icon. */
@@ -1521,6 +1569,7 @@ esp_err_t muse_ui_start(void)
 
     s_image_mutex = xSemaphoreCreateMutex();
     muse_board->display_lock(-1);
+    init_text_font();
     build_screen();
     if (s_settings) {
         muse_settings_ui_build(s_settings);

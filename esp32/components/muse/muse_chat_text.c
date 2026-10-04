@@ -96,10 +96,34 @@ void muse_hatch_tail_words(const char *src, char *out, size_t cap)
     strlcpy(out, p, cap);
 }
 
+/* Punctuation that doesn't start a line. */
+static bool closes(int32_t cp)
+{
+    return (cp > 0 && cp < 0x80 && strchr(",.;:!?)]}%", (int)cp))
+        || cp == 0x2019 || cp == 0x201D || cp == 0x2026      /* ' " ... */
+        || cp == 0x3001 || cp == 0x3002                      /* ideographic comma, full stop */
+        || (cp >= 0x3009 && cp <= 0x3011 && cp % 2)          /* closing brackets */
+        || cp == 0x3015 || cp == 0x3017
+        || cp == 0xFF01 || cp == 0xFF09 || cp == 0xFF0C || cp == 0xFF0E
+        || cp == 0xFF1A || cp == 0xFF1B || cp == 0xFF1F || cp == 0xFF3D || cp == 0xFF5D;
+}
+
+/* Punctuation that doesn't end one. */
+static bool opens(int32_t cp)
+{
+    return (cp > 0 && cp < 0x80 && strchr("([{", (int)cp))
+        || cp == 0x2018 || cp == 0x201C
+        || (cp >= 0x3008 && cp <= 0x3010 && cp % 2 == 0)     /* opening brackets */
+        || cp == 0x3014 || cp == 0x3016
+        || cp == 0xFF08 || cp == 0xFF3B || cp == 0xFF5B;
+}
+
 /*
  * The next line of `text` wrapped to `cols` characters as the caption shows
- * them (an ellipsis as three dots, muse_text.h), splitting only words longer
- * than a line.
+ * them (an ellipsis as three dots unless its font has one, muse_text.h),
+ * splitting only words longer than a line. Text without spaces (Chinese)
+ * breaks between any two characters, keeping punctuation with the one it
+ * belongs to.
  */
 static bool next_line(const char **text, int cols, const char **start, size_t *len)
 {
@@ -108,22 +132,27 @@ static bool next_line(const char **text, int cols, const char **start, size_t *l
         p++;
     }
     const char *end = p, *brk = NULL;
+    int32_t prev = 0;
     int n = 0;
     while (*end && *end != '\n') {
         size_t bytes;
+        int32_t cp = muse_text_decode(end, &bytes);
+        if (n && (*end == ' '
+                  || ((muse_text_ideographic(cp) || muse_text_ideographic(prev))
+                      && !closes(cp) && !opens(prev)))) {
+            brk = end;
+        }
         char shown[4];
-        int w = muse_text_ascii(end, &bytes, shown);
+        int w = muse_text_caption_ascii(end, &bytes, shown);
         w = w < 0 ? 1 : w;
         if (n + w > cols && n) {
             break;
         }
-        if (*end == ' ') {
-            brk = end;
-        }
         n += w;
+        prev = cp;
         end += bytes;
     }
-    if (*end && *end != ' ' && *end != '\n' && brk) {
+    if (*end && *end != '\n' && brk) {
         end = brk;   /* don't split a word */
     }
     *start = p;

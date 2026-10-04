@@ -115,7 +115,7 @@ void muse_state_set_caption(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    muse_text_to_ascii(buf, sizeof(buf));   /* replies have curly quotes and dashes */
+    muse_text_caption_to_ascii(buf, sizeof(buf));   /* replies have curly quotes and dashes */
 
     portENTER_CRITICAL(&s_lock);
     if (strcmp(buf, s_caption) != 0) {

@@ -17,19 +17,23 @@
 /* Drives the serial console's "@chat" encoder and line unescaper (muse_chat_text.c)
  * for test_muse_serial_chat.py, which parses the result the way tools/muse/chat.py does.
  *   console    stdin is a reply's text: prints the lines a typed turn sends for it
- *   unescape   stdin is console lines: prints each unescaped, as "<length>:<bytes>" */
+ *   unescape   stdin is console lines: prints each unescaped, as "<length>:<bytes>"
+ *   pages C L  stdin is a reply's text: prints each page of it, C columns by L
+ *              lines, as the caption shows them while it's said, then a form feed */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "muse_chat.h"
+#include "muse_chat_priv.h"
 #include "muse_state.h"
 
-/* Captions page to the screen; the console lines tested here don't. */
+static int s_cols = 16, s_lines = 2;
+
 void muse_state_page(int *cols, int *lines)
 {
-    *cols = 16;
-    *lines = 2;
+    *cols = s_cols;
+    *lines = s_lines;
 }
 
 static char *read_all(size_t *len)
@@ -79,8 +83,18 @@ int main(int argc, char **argv)
                 break;
             }
         }
+    } else if (argc > 3 && !strcmp(argv[1], "pages")) {
+        s_cols = atoi(argv[2]);
+        s_lines = atoi(argv[3]);
+        static char page[MUSE_CAPTION_MAX], shown[MUSE_CAPTION_MAX];
+        for (size_t at = 0; at < len; at++) {
+            if (muse_hatch_caption_at(in, at, page, sizeof(page)) && strcmp(page, shown) != 0) {
+                strcpy(shown, page);
+                printf("%s\f", page);
+            }
+        }
     } else {
-        fprintf(stderr, "usage: %s console|unescape < input\n", argv[0]);
+        fprintf(stderr, "usage: %s console|unescape|pages < input\n", argv[0]);
         return 2;
     }
     free(in);

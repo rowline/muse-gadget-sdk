@@ -64,6 +64,10 @@
 #define LV_THEME_DEFAULT_GROW 1
 #define LV_THEME_DEFAULT_TRANSITION_TIME 80
 
+/* A board's wide font (MUSE_SIM_WIDE_FONT) loads from memory, as on the device. */
+#define LV_USE_FS_MEMFS 1
+#define LV_FS_MEMFS_LETTER 'M'
+
 /* Keep the production UI's console snapshot hook available for debugging. */
 #define LV_USE_SNAPSHOT 1
 

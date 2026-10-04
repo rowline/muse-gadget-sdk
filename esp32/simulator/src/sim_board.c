@@ -17,6 +17,9 @@
 #include "sim_board.h"
 #include "sim_platform.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "src/drivers/sdl/lv_sdl_mouse.h"
 #include "src/drivers/sdl/lv_sdl_window.h"
 
@@ -79,6 +82,29 @@ static esp_err_t sim_power_off(void)
     return ESP_FAIL;
 }
 
+/* An LVGL binary font named by MUSE_SIM_WIDE_FONT, such as projects/muse_gadget's
+ * fonts/cjk_16.bin, to preview captions in Chinese. */
+static const lv_font_t *sim_wide_font(void)
+{
+    const char *path = getenv("MUSE_SIM_WIDE_FONT");
+    FILE *f = path && *path ? fopen(path, "rb") : NULL;
+    if (!f) {
+        return NULL;
+    }
+    lv_font_t *font = NULL;
+    long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    void *buf = size > 0 ? malloc((size_t)size) : NULL;
+    if (buf && fseek(f, 0, SEEK_SET) == 0 && fread(buf, 1, (size_t)size, f) == (size_t)size) {
+        font = lv_binfont_create_from_buffer(buf, (uint32_t)size);   /* copies what it keeps */
+    }
+    free(buf);
+    fclose(f);
+    if (!font) {
+        fprintf(stderr, "MUSE_SIM_WIDE_FONT: can't load %s\n", path);
+    }
+    return font;
+}
+
 static const muse_board_t s_sim_board = {
 #if MUSE_SIM_BOARD_ESP_MOSAICO
     .name = "ESP-Mosaico Simulator",
@@ -112,6 +138,7 @@ static const muse_board_t s_sim_board = {
     .display_unlock = sim_display_unlock,
     .set_brightness = sim_set_brightness,
     .panel_sleep = sim_panel_sleep,
+    .wide_font = sim_wide_font,
     .power_off = sim_power_off,
 };
 

@@ -56,8 +56,9 @@ float muse_state_level(void);
 void muse_state_set_progress(float progress);
 float muse_state_progress(void);
 
-/* Room for a page of reply text; longer captions are cut short. */
-#define MUSE_CAPTION_MAX 400
+/* Room for a page of reply text, at up to three bytes a column as Chinese
+ * takes; longer captions are cut short. */
+#define MUSE_CAPTION_MAX 800
 
 void muse_state_set_caption(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Copies the caption if it changed since *version; returns true on change. */

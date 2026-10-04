@@ -84,8 +84,8 @@ class HarnessTest(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def run_harness(self, mode: str, data: bytes) -> bytes:
-        proc = subprocess.run([str(self.binary), mode], input=data, capture_output=True)
+    def run_harness(self, mode: str, data: bytes, *args: str) -> bytes:
+        proc = subprocess.run([str(self.binary), mode, *args], input=data, capture_output=True)
         self.assertEqual(proc.returncode, 0, msg=proc.stderr.decode())
         return proc.stdout
 
@@ -143,6 +143,28 @@ class HarnessTest(unittest.TestCase):
                     out = rest[int(n):]
                 self.assertEqual(got, data)
                 self.assertEqual(sizes, [total for _, total in lines])
+
+    def pages(self, text: str, cols: int, lines: int) -> list[list[str]]:
+        out = self.run_harness("pages", text.encode(), str(cols), str(lines)).decode()
+        return [page.split("\n") for page in out.split("\f")[:-1]]
+
+    def test_chinese_wraps_between_characters(self) -> None:
+        text = ("我看到桌上有一个白色的杯子，旁边放着一本打开的书（可能是小说）。"
+                "Muse 会把拍到的照片发给你，也可以用AI帮你描述画面里的东西！") * 3
+        for cols, rows in ((16, 2), (23, 11), (24, 3)):
+            with self.subTest(cols=cols, lines=rows):
+                pages = self.pages(text, cols, rows)
+                said = pages[0] + [line for page in pages[1:] for line in page[1:]]
+                for page in pages[:-1]:
+                    self.assertEqual(len(page), rows)   # nothing cut for want of bytes
+                for line in said:
+                    self.assertLessEqual(len(line), cols, msg=line)
+                    self.assertFalse(line[0] in "，。！？）、" or line[-1] in "（", msg=line)
+                    self.assertNotRegex(line, r"^(use|se|e|I)|(M|Mu|Mus|A)$")   # words stay whole
+                self.assertEqual("".join(said).replace(" ", ""), text.replace(" ", ""))
+                if cols == 23:
+                    self.assertGreater(len(pages[0]), 1)
+                    self.assertGreater(len(pages[0][0]), cols - 2)   # Chinese fills its lines
 
 
 class ReplyTest(unittest.TestCase):

@@ -81,6 +81,11 @@ typedef struct {
      * so the chip can light-sleep. Buttons still wake it. NULL: LVGL keeps
      * running. */
     void (*display_pause)(bool pause);
+    /* Glyphs for the characters unscii lacks (Chinese, Japanese, Korean),
+     * 16 px like unscii_16 and one of its columns wide; the full layout's
+     * captions and replies fall back to it. Called once, with the display
+     * locked. NULL, or NULL returned: those characters don't show. */
+    const lv_font_t *(*wide_font)(void);
 
     /* Codec handles for one duplex, 2-slot I2S bus, not yet opened. */
     esp_err_t (*audio_init)(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t *mic);

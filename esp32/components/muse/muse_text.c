@@ -174,11 +174,37 @@ static const char *stand_in(int32_t cp)
     return NULL;
 }
 
-int muse_text_ascii(const char *s, size_t *len, char out[4])
+int32_t muse_text_decode(const char *s, size_t *len)
+{
+    return decode((const unsigned char *)s, len);
+}
+
+bool muse_text_ideographic(int32_t cp)
+{
+    return (cp >= 0x2E80 && cp <= 0x303F)      /* radicals, CJK punctuation */
+        || (cp >= 0x3040 && cp <= 0x30FF)      /* kana */
+        || (cp >= 0x3100 && cp <= 0x31FF)      /* bopomofo, kana extensions */
+        || (cp >= 0x3400 && cp <= 0x4DBF)      /* ideographs, extension A */
+        || (cp >= 0x4E00 && cp <= 0x9FFF)      /* ideographs */
+        || (cp >= 0xAC00 && cp <= 0xD7A3)      /* hangul syllables */
+        || (cp >= 0xF900 && cp <= 0xFAFF)      /* compatibility ideographs */
+        || (cp >= 0xFE30 && cp <= 0xFE4F)      /* vertical forms */
+        || (cp >= 0xFF00 && cp <= 0xFF60)      /* full-width punctuation, letters */
+        || (cp >= 0x20000 && cp <= 0x3FFFD);   /* ideographs, extensions B on */
+}
+
+static bool (*s_caption_shows)(int32_t cp);
+
+void muse_text_caption_font(bool (*shows)(int32_t cp))
+{
+    s_caption_shows = shows;
+}
+
+static int ascii(const char *s, size_t *len, char out[4], bool caption)
 {
     int32_t cp = decode((const unsigned char *)s, len);
-    if (cp < 0x80) {
-        return -1;   /* ASCII, or broken */
+    if (cp < 0x80 || (caption && s_caption_shows && s_caption_shows(cp))) {
+        return -1;   /* ASCII, broken, or the caption's font has it */
     }
     if (cp >= 0xC0 && cp <= 0x17F && LATIN[cp - 0xC0] != '_') {
         out[0] = LATIN[cp - 0xC0];
@@ -193,13 +219,23 @@ int muse_text_ascii(const char *s, size_t *len, char out[4])
     return (int)strlen(out);
 }
 
-void muse_text_to_ascii(char *s, size_t cap)
+int muse_text_ascii(const char *s, size_t *len, char out[4])
+{
+    return ascii(s, len, out, false);
+}
+
+int muse_text_caption_ascii(const char *s, size_t *len, char out[4])
+{
+    return ascii(s, len, out, true);
+}
+
+static void to_ascii(char *s, size_t cap, bool caption)
 {
     size_t n = strlen(s);
     for (char *p = s; *p;) {
         size_t len;
         char a[4];
-        int alen = muse_text_ascii(p, &len, a);
+        int alen = ascii(p, &len, a, caption);
         if (alen < 0) {
             p += len;
             continue;
@@ -213,6 +249,16 @@ void muse_text_to_ascii(char *s, size_t cap)
         n = n - len + alen;
         p += alen;
     }
+}
+
+void muse_text_to_ascii(char *s, size_t cap)
+{
+    to_ascii(s, cap, false);
+}
+
+void muse_text_caption_to_ascii(char *s, size_t cap)
+{
+    to_ascii(s, cap, true);
 }
 
 const char *muse_text_showable(const char *text, char *buf, size_t cap)
