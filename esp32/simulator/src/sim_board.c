@@ -20,7 +20,12 @@
 #include "src/drivers/sdl/lv_sdl_mouse.h"
 #include "src/drivers/sdl/lv_sdl_window.h"
 
-#define WATCHER_RESOLUTION 412
+#if MUSE_SIM_BOARD_ESP_MOSAICO
+/* ESP-Mosaico: 480 px square; matches projects/muse_gadget's board. */
+#define SIM_RESOLUTION 480
+#else
+#define SIM_RESOLUTION 412     /* SenseCAP Watcher */
+#endif
 
 static lv_display_t *s_display;
 
@@ -34,7 +39,7 @@ static esp_err_t sim_init(void)
 
 static lv_display_t *sim_display_start(lv_indev_t **touch)
 {
-    s_display = lv_sdl_window_create(WATCHER_RESOLUTION, WATCHER_RESOLUTION);
+    s_display = lv_sdl_window_create(SIM_RESOLUTION, SIM_RESOLUTION);
     if (!s_display) {
         return NULL;
     }
@@ -75,15 +80,31 @@ static esp_err_t sim_power_off(void)
 }
 
 static const muse_board_t s_sim_board = {
+#if MUSE_SIM_BOARD_ESP_MOSAICO
+    .name = "ESP-Mosaico Simulator",
+    .width = SIM_RESOLUTION,
+    .height = SIM_RESOLUTION,
+    .round = false,
+    .touch = true,
+    .diagonal_in = 1.8f,
+    .talk_button = "AI",
+    .aux_button = "BOOT",
+    /* AI is on the top edge, right of centre; BOOT is on the bottom edge,
+     * left of the USB-C port (ON/OFF is to its right). Clear of the rounded
+     * corners, the status line and the page dots. */
+    .talk_hint = { LV_ALIGN_TOP_MID, 140, 14 },
+    .aux_hint = { LV_ALIGN_BOTTOM_MID, -110, -12 },
+#else
     .name = "SenseCAP Watcher Simulator",
-    .width = WATCHER_RESOLUTION,
-    .height = WATCHER_RESOLUTION,
+    .width = SIM_RESOLUTION,
+    .height = SIM_RESOLUTION,
     .round = true,
     .touch = true,
     .diagonal_in = 1.45f,
     .talk_button = "wheel",
     .aux_button = "scroll",
     .talk_hint = { LV_ALIGN_CENTER, 100, -143 },
+#endif
     .frame_ms = 40,
     .init = sim_init,
     .display_start = sim_display_start,

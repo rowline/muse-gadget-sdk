@@ -36,6 +36,12 @@ option(MUSE_SIM_FETCH_DEPS
        ON)
 option(MUSE_SIM_SANITIZERS "Build the simulator with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(MUSE_SIM_WARNINGS_AS_ERRORS "Treat simulator warnings as errors" OFF)
+set(MUSE_SIM_BOARD "watcher" CACHE STRING
+    "Board the window imitates: watcher (412 px round) or esp_mosaico (480 px square)")
+set_property(CACHE MUSE_SIM_BOARD PROPERTY STRINGS watcher esp_mosaico)
+if(NOT MUSE_SIM_BOARD MATCHES "^(watcher|esp_mosaico)$")
+    message(FATAL_ERROR "MUSE_SIM_BOARD must be watcher or esp_mosaico, not ${MUSE_SIM_BOARD}")
+endif()
 
 set(MUSE_SIM_LVGL_VERSION "9.5.0")
 set(MUSE_SIM_SDL_MIN_VERSION "2.0.18")
@@ -181,6 +187,9 @@ if(APPLE)
 endif()
 
 target_compile_options(muse_simulator PRIVATE -Wall -Wextra -Wpedantic)
+if(MUSE_SIM_BOARD STREQUAL "esp_mosaico")
+    target_compile_definitions(muse_simulator PRIVATE MUSE_SIM_BOARD_ESP_MOSAICO=1)
+endif()
 if(MUSE_SIM_WARNINGS_AS_ERRORS)
     target_compile_options(muse_simulator PRIVATE -Werror)
 endif()
