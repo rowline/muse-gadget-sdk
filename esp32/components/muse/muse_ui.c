@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -1411,7 +1412,7 @@ static void update_status(muse_mode_t mode, float now)
         }
     }
 
-    static char caption[MUSE_CAPTION_MAX];
+    EXT_RAM_BSS_ATTR static char caption[MUSE_CAPTION_MAX];
     bool fresh = muse_state_caption(caption, sizeof(caption), &s_caption_version);
     int answer = -1;
     if (s_reply_lbl) {

@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -41,7 +42,7 @@ static volatile int64_t s_happy_until_us;
 static volatile bool s_asleep;
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
-static char s_caption[MUSE_CAPTION_MAX];
+EXT_RAM_BSS_ATTR static char s_caption[MUSE_CAPTION_MAX];   /* in PSRAM where static data may go */
 static uint32_t s_caption_version;
 static SemaphoreHandle_t s_format_lock;
 static EventGroupHandle_t s_wake;
@@ -109,7 +110,7 @@ float muse_state_progress(void)
 
 void muse_state_set_caption(const char *fmt, ...)
 {
-    static char buf[sizeof(s_caption)];   /* too big for some callers' stacks */
+    EXT_RAM_BSS_ATTR static char buf[sizeof(s_caption)];   /* too big for some callers' stacks */
     xSemaphoreTake(s_format_lock, portMAX_DELAY);
     va_list ap;
     va_start(ap, fmt);
