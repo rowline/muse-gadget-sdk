@@ -30,9 +30,7 @@
 #include "cJSON.h"
 
 #include "esp_heap_caps.h"
-#if CONFIG_MUSE_WATCHER_CAMERA
 #include "freertos/idf_additions.h"
-#endif
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_attr.h"
@@ -70,6 +68,9 @@
 #endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
+#else
+#include "camera.h"
+#include "mbedtls/base64.h"
 #endif
 #if CONFIG_MUSE_ENABLED
 #include "muse_glue.h"
@@ -1547,18 +1548,54 @@ static void draw_url_done(const image_fetch_result_t *r, void *user) {
 }
 #endif
 
-#if CONFIG_MUSE_WATCHER_CAMERA
+#if !CONFIG_MUSE_WATCHER_CAMERA
+// The camera a board registered (components/camera), as camera.capture
+// returns it. The Watcher's own path also serves its preview.
+static bool camera_capture_base64(char **jpeg_base64, const char **error) {
+    camera_frame_t frame;
+    esp_err_t err = camera_capture(&frame);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "camera capture failed: %s", esp_err_to_name(err));
+        *error = err == ESP_ERR_INVALID_STATE ? "camera busy"
+               : err == ESP_ERR_NOT_FOUND ? "no camera module found"
+               : "camera capture failed";
+        return false;
+    }
+    size_t cap = (frame.len + 2) / 3 * 4 + 1, out = 0;
+    char *b64 = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (b64 && mbedtls_base64_encode((unsigned char *)b64, cap, &out,
+                                     frame.jpeg, frame.len) != 0) {
+        heap_caps_free(b64);
+        b64 = NULL;
+    }
+    ESP_LOGI(TAG, "camera capture: %dx%d, %u-byte JPEG", frame.width,
+             frame.height, (unsigned)frame.len);
+    camera_release(&frame);
+    if (!b64) {
+        *error = "no memory for the photo";
+        return false;
+    }
+    b64[out] = '\0';
+    *jpeg_base64 = b64;
+    return true;
+}
+#endif
+
 typedef struct {
     noise_ctrl_session_generation_t session_generation;
     char request_id[64];
-} watcher_camera_task_args_t;
+} camera_capture_task_args_t;
 
-static void watcher_camera_capture_task(void *arg) {
-    watcher_camera_task_args_t *args = arg;
+static void camera_capture_task(void *arg) {
+    camera_capture_task_args_t *args = arg;
     char *image = NULL;
     const char *error = NULL;
     cJSON *result = cJSON_CreateObject();
+#if CONFIG_MUSE_WATCHER_CAMERA
     bool ok = watcher_camera_capture(&image, &error);
+#else
+    bool ok = camera_capture_base64(&image, &error);
+#endif
     cJSON_AddBoolToObject(result, "ok", ok);
     if (ok) {
         cJSON *payload = cJSON_AddObjectToObject(result, "payload");
@@ -1575,7 +1612,6 @@ static void watcher_camera_capture_task(void *arg) {
     stack_monitor_record(NULL);
     vTaskDeleteWithCaps(NULL);
 }
-#endif
 
 // ---- WebSocket command callbacks -------------------------------------------
 
@@ -1868,12 +1904,16 @@ static cJSON *on_ws_command(
     }
 #endif
 #if CONFIG_MUSE_WATCHER_CAMERA
-    if (strcmp(command, "camera.capture") == 0) {
-        watcher_camera_task_args_t *args = calloc(1, sizeof(*args));
+    const bool has_camera = true;
+#else
+    const bool has_camera = camera_get() != NULL;
+#endif
+    if (has_camera && strcmp(command, "camera.capture") == 0) {
+        camera_capture_task_args_t *args = calloc(1, sizeof(*args));
         if (!args) return command_error("out_of_memory", "failed to allocate camera request");
         args->session_generation = session_generation;
         strncpy(args->request_id, request_id, sizeof(args->request_id) - 1);
-        if (xTaskCreateWithCaps(watcher_camera_capture_task, "camera_capture", 8192,
+        if (xTaskCreateWithCaps(camera_capture_task, "camera_capture", 8192,
                                 args, 4, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
             free(args);
             return command_error("out_of_memory", "failed to start camera capture");
@@ -1882,7 +1922,6 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
     }
-#endif
 #if CONFIG_HOMEHUB_VOICE
     if (strcmp(command, "voice.configure") == 0) {
         return voice_configure_command(params);

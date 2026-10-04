@@ -39,6 +39,7 @@
 
 extern "C" {
 #include "cJSON.h"
+#include "camera.h"
 #include "led_status.h"
 #include "ota.h"
 #if CONFIG_MUSE_ENABLED
@@ -1354,6 +1355,19 @@ static char *build_register_json(void) {
                 nullptr, nullptr);
     cJSON_AddNumberToObject(
         cJSON_GetObjectItem(commands, "camera.capture"), "timeout_ms", 30000);
+#else
+    // Any other board's registered camera (components/camera).
+    const camera_driver_t *camera = camera_get();
+    if (camera) {
+        char description[192];
+        snprintf(description, sizeof(description),
+                 "Capture one still JPEG frame from this gadget's camera (%s). "
+                 "The frame is returned as base64 only when this command is explicitly invoked.",
+                 camera->name ? camera->name : "camera");
+        add_command(commands, "camera.capture", description, nullptr, nullptr);
+        cJSON_AddNumberToObject(
+            cJSON_GetObjectItem(commands, "camera.capture"), "timeout_ms", 30000);
+    }
 #endif
 
     if (ota_is_enabled()) {

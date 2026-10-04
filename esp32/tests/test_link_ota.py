@@ -163,6 +163,8 @@ int main(void) {
 #include "esp_app_desc.h"
 #define nullptr NULL
 #define CONFIG_HOMEHUB_TUNNEL 1
+typedef struct { const char *name; } camera_driver_t;
+static const camera_driver_t *camera_get(void) { return NULL; }   /* no camera */
 static bool enabled;
 bool ota_is_enabled(void) { return enabled; }
 static esp_app_desc_t app = { .version = "999.0.0" };
