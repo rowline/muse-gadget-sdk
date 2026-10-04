@@ -26,8 +26,9 @@
  *   2. POST /chat/stream with the transcript. The reply arrives as events on
  *      the connection's long-lived POST /chat/subscribe stream: one or more
  *      assistant messages, each delta.message_start / text_append / message_done.
- *   3. Each finished message is shown at reading pace (see start_tts to
- *      speak it with a TTS API of your own; Muse doesn't speak gadget replies).
+ *   3. Each finished message is said by the board's voice (muse_tts.h) with
+ *      the speaker on, or else shown at reading pace (see start_tts to speak
+ *      it with a TTS API of your own; Muse doesn't speak gadget replies).
  * A turn has no explicit end event; like Sidekick, it settles once every
  * message is done and nothing has arrived for a few seconds.
  *
@@ -69,6 +70,7 @@ extern "C" {
 #include "muse_account_api.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "muse_tts.h"
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
@@ -102,6 +104,9 @@ static const char *TAG = "muse_chat_session";
 #define SPEECH_CHARS_PER_S 14              /* until the speech's length is known */
 #define TEXT_CHARS_PER_S 16                /* speaker off: reading pace, a little over speech */
 #define TEXT_HOLD_S 2                      /* speaker off: how long a message's last lines stay up */
+#define SAY_CHUNK 1024                     /* samples per read of the board's voice: 64 ms */
+#define SAY_READS 2                        /* reads per loop, so the sockets stay served */
+static_assert(SAY_CHUNK <= MINIMP3_MAX_SAMPLES_PER_FRAME, "the voice reads into s_pcm16");
 
 #define PING_US (20 * 1000000LL)
 #define DEAD_US (60 * 1000000LL)           /* nothing from the server, pongs included */
@@ -236,6 +241,7 @@ struct turn_t {
     /* TTS */
     int tts_msg;             /* message being fetched (or shown, speaker off), or -1 */
     bool silent;             /* speaker off: tts_msg is paced by silence, not fetched */
+    bool spoken;             /* tts_msg is said by the board's voice (muse_tts.h) */
     uint8_t *mp3;            /* MP3_BUF */
     size_t mp3_len;
     bool mp3_ended;
@@ -952,6 +958,10 @@ static void turn_reset_streams(void)
 static void turn_finish(void)
 {
     turn_reset_streams();
+    if (s_turn.spoken) {
+        muse_tts_get()->end();
+        s_turn.spoken = false;
+    }
     s_turn.phase = P_IDLE;
     s_turn.dict_id = s_turn.chat_id = 0;
     s_turn.tts_msg = -1;
@@ -1502,12 +1512,25 @@ static void start_tts(void)
         if (m.tts != TTS_QUEUED) {
             continue;
         }
+        const muse_tts_t *voice = muse_tts_get();
+        if (voice && s_turn.texts && muse_settings_speaker_on() && voice->begin(s_turn.texts + i * TEXT_MAX)) {
+            m.pcm_start = s_turn.pcm_out;
+            m.pcm_frames = 0;
+            m.tts = TTS_ACTIVE;
+            s_turn.tts_msg = i;
+            s_turn.spoken = true;
+            mark(M_TTS);
+            ESP_LOGI(TAG, "saying message %s (%u chars) in %s", m.id, (unsigned)m.len, voice->name);
+            show_reply_start(m);
+            return;
+        }
         /*
-         * Replies are text, shown at reading pace: silence in place of speech
-         * paces the captions and ends the turn. To speak them instead, send
-         * the message's text (s_turn.texts + i * TEXT_MAX, if texts was
-         * allocated; up to TEXT_MAX - 1 bytes) to a TTS API of your choice and
-         * play the MP3 it returns. In place of the silence below: keep
+         * Replies are text; without the board's voice they're shown at reading
+         * pace: silence in place of speech paces the captions and ends the
+         * turn. To speak them with a TTS API instead, send the message's text
+         * (s_turn.texts + i * TEXT_MAX, if texts was allocated; up to
+         * TEXT_MAX - 1 bytes) to a TTS API of your choice and play the MP3 it
+         * returns. In place of the silence below: keep
          * m.tts = TTS_ACTIVE and s_turn.tts_msg = i, set s_turn.silent = false,
          * m.pcm_start = s_turn.pcm_out, m.pcm_frames = 0, s_turn.mp3_len = 0,
          * s_turn.mp3_ended = false, s_turn.kbps = 0, s_turn.down_rate = 0 and
@@ -1572,6 +1595,29 @@ static void pace_silently(void)
     }
 }
 
+/* The board's voice: hands its speech to the voice task while the reply buffer has room. */
+static void say(void)
+{
+    const muse_tts_t *voice = muse_tts_get();
+    msg_t &m = s_turn.msgs[s_turn.tts_msg];
+    for (int k = 0; k < SAY_READS && xStreamBufferSpacesAvailable(s_out) >= SAY_CHUNK * sizeof(int16_t); k++) {
+        size_t n = voice->read(s_pcm16, SAY_CHUNK);
+        if (!n) {
+            voice->end();
+            m.pcm_frames = s_turn.pcm_out - m.pcm_start;
+            m.tts = TTS_FINISHED;
+            s_turn.tts_msg = -1;
+            s_turn.spoken = false;
+            return;
+        }
+        if (s_turn.gen == s_gen.load()) {
+            mark(M_AUDIO);
+            xStreamBufferSend(s_out, s_pcm16, n * sizeof(int16_t), 0);
+        }
+        s_turn.pcm_out += n;
+    }
+}
+
 /* Decodes buffered MP3 while the reply buffer has room. */
 static void decode(void)
 {
@@ -1580,6 +1626,10 @@ static void decode(void)
     }
     if (s_turn.silent) {
         pace_silently();
+        return;
+    }
+    if (s_turn.spoken) {
+        say();
         return;
     }
     /*
