@@ -66,6 +66,15 @@ menu "Muse"
         config MUSE_BOARD_M5STACK_STOPWATCH
             bool "M5Stack StopWatch (ESP32-S3, round touch AMOLED)"
             depends on IDF_TARGET_ESP32S3
+
+        config MUSE_BOARD_HOST
+            bool "Supplied by the host project"
+            help
+                The project that builds this firmware defines
+                muse_board_get() in one of its own components (link it with
+                WHOLE_ARCHIVE). boards/muse_lcd_bands.c and esp_lvgl_adapter
+                are available to it. ESP-Mosaico's board lives this way in
+                its workspace, beside the board support package it uses.
     endchoice
 
     config MUSE_ENABLED
@@ -86,14 +95,18 @@ menu "Muse"
         default "m5stack_stickc_plus2" if MUSE_BOARD_M5STACK_STICKC_PLUS2
         default "m5stack_cardputer_adv" if MUSE_BOARD_M5STACK_CARDPUTER_ADV
         default "m5stack_stopwatch" if MUSE_BOARD_M5STACK_STOPWATCH
+        default "host" if MUSE_BOARD_HOST
         default "none"
 
     # The Muse tools' serial port: the console UART behind the board's USB
     # bridge, where the chip's own USB Serial/JTAG isn't wired to a connector
     # (the Watcher's USB-C goes to a CH342) or the chip has none.
     config MUSE_CONSOLE_UART
-        bool
+        bool "Muse tools on the console UART" if !MUSE_BOARD_SENSECAP_WATCHER && SOC_USB_SERIAL_JTAG_SUPPORTED
         default y if MUSE_BOARD_SENSECAP_WATCHER || !SOC_USB_SERIAL_JTAG_SUPPORTED
+        help
+            Use the console UART instead of USB Serial/JTAG, for example where
+            a camera module needs the USB Serial/JTAG pads.
 
     config MUSE_WATCHER_CAMERA
         bool "SenseCAP Watcher camera capture and live preview"
