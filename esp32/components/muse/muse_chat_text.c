@@ -119,22 +119,85 @@ static bool opens(int32_t cp)
 }
 
 /*
- * The next line of `text` wrapped to `cols` characters as the caption shows
- * them (an ellipsis as three dots unless its font has one, muse_text.h),
- * splitting only words longer than a line. Text without spaces (Chinese)
- * breaks between any two characters, keeping punctuation with the one it
- * belongs to.
+ * Markdown the caption leaves out, at p: how many bytes, or 0. Replies come
+ * formatted for a chat window. Headings' "#", list bullets and quote marks
+ * go at the start of a line, emphasis and code marks anywhere, and a link
+ * keeps its text without its brackets or address.
  */
-static bool next_line(const char **text, int cols, const char **start, size_t *len)
+static size_t markup(const char *p, bool line_start)
+{
+    if (line_start) {
+        const char *q = p;
+        while (*q == '#') {
+            q++;
+        }
+        if (q != p && *q == ' ') {
+            return q + 1 - p;
+        }
+        if ((*p == '-' || *p == '*' || *p == '+') && p[1] == ' ') {
+            return 2;
+        }
+        if (*p == '>') {
+            return p[1] == ' ' ? 2 : 1;
+        }
+    }
+    if (*p == '*' || *p == '`') {
+        return 1;
+    }
+    if ((p[0] == '_' && p[1] == '_') || (p[0] == '~' && p[1] == '~')) {
+        return 2;
+    }
+    if (*p == '[') {
+        for (const char *q = p + 1; *q && *q != '\n'; q++) {
+            if (q[0] == ']' && q[1] == '(') {
+                return 1;
+            }
+        }
+    }
+    if (p[0] == ']' && p[1] == '(') {
+        const char *q = p + 2;
+        while (*q && *q != ')' && *q != '\n' && *q != ' ') {
+            q++;
+        }
+        if (*q == ')') {
+            return q + 1 - p;
+        }
+    }
+    return 0;
+}
+
+/* Whether p, after any spaces, begins a line of the reply rather than a wrapped part of one. */
+static bool starts_line(const char *base, const char *p)
+{
+    while (p > base && p[-1] == ' ') {
+        p--;
+    }
+    return p == base || p[-1] == '\n';
+}
+
+/*
+ * The next line of `text` wrapped to `cols` characters as the caption shows
+ * them (an ellipsis as three dots unless its font has one, muse_text.h, and
+ * without markdown), splitting only words longer than a line. Text without
+ * spaces (Chinese) breaks between any two characters, keeping punctuation
+ * with the one it belongs to. `base` is the start of the whole text.
+ */
+static bool next_line(const char *base, const char **text, int cols, const char **start, size_t *len)
 {
     const char *p = *text;
     while (*p == ' ' || *p == '\n') {
         p++;
     }
     const char *end = p, *brk = NULL;
+    bool line_start = starts_line(base, p);
     int32_t prev = 0;
     int n = 0;
     while (*end && *end != '\n') {
+        size_t skip = markup(end, line_start && end == p);
+        if (skip) {
+            end += skip;
+            continue;
+        }
         size_t bytes;
         int32_t cp = muse_text_decode(end, &bytes);
         if (n && (*end == ' '
@@ -161,6 +224,29 @@ static bool next_line(const char **text, int cols, const char **start, size_t *l
     return end != p;
 }
 
+/* A line of the reply as next_line() measured it, without its markdown, at out. */
+static size_t put_line(char *out, const char *base, const char *start, size_t len)
+{
+    const char *p = start, *end = start + len;
+    bool line_start = starts_line(base, start);
+    size_t o = 0;
+    while (p < end) {
+        size_t skip = markup(p, line_start && p == start);
+        if (skip) {
+            p += skip;
+            continue;
+        }
+        size_t bytes;
+        muse_text_decode(p, &bytes);
+        bytes = p + bytes <= end ? bytes : (size_t)(end - p);
+        memcpy(out + o, p, bytes);
+        o += bytes;
+        p += bytes;
+    }
+    out[o] = '\0';
+    return o;
+}
+
 /*
  * Wraps `text` to the screen's page (muse_state_page) and puts the page holding
  * byte `at` in `out`. Pages overlap by a line: a page's last line starts the
@@ -173,7 +259,7 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap)
     const char *p = text, *start;
     size_t len;
     int line = -1, n = 0;
-    while (next_line(&p, cols, &start, &len)) {
+    while (next_line(text, &p, cols, &start, &len)) {
         line = n++;
         if ((size_t)(start + len - text) > at) {
             break;
@@ -187,14 +273,17 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap)
     size_t o = 0;
     out[0] = '\0';
     p = text;
-    for (n = 0; n < first + lines && next_line(&p, cols, &start, &len); n++) {
+    for (n = 0; n < first + lines && next_line(text, &p, cols, &start, &len); n++) {
         if (n < first) {
             continue;
         }
         if (o + 1 + len >= cap) {
             break;   /* whole lines only */
         }
-        o += snprintf(out + o, cap - o, "%s%.*s", o ? "\n" : "", (int)len, start);
+        if (o) {
+            out[o++] = '\n';
+        }
+        o += put_line(out + o, text, start, len);
     }
     return true;
 }

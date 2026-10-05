@@ -166,6 +166,19 @@ class HarnessTest(unittest.TestCase):
                     self.assertGreater(len(pages[0]), 1)
                     self.assertGreater(len(pages[0][0]), cols - 2)   # Chinese fills its lines
 
+    def test_markdown_stays_off_the_caption(self) -> None:
+        text = ("## Summary\n- I took a **photo** of your desk.\n* See [the docs](https://example.com/a?b=1) "
+                "for `more`.\n> Quoted __line__ with ~~old~~ text.\n1. Numbers stay: 3.5 and snake_case.\n"
+                "### 小结\n- 白色的**杯子**，旁边有[说明](http://x.cn/y)。")
+        said = [line for page in self.pages(text, 24, 3) for line in page]
+        joined = "\n".join(said)
+        for mark in ("#", "**", "`", "](", "[", "> ", "__", "~~", "- I", "* See", "- 白"):
+            self.assertNotIn(mark, joined, msg=joined)
+        for words in ("Summary", "I took a photo of your desk.", "the docs for more", "Quoted line with old",
+                      "Numbers stay: 3.5 and snake_case.", "小结", "白色的杯子，旁边有说明。"):
+            self.assertIn(words, joined.replace("\n", " ").replace("  ", " ") if words.isascii()
+                          else joined.replace("\n", ""), msg=joined)
+
 
 class ReplyTest(unittest.TestCase):
     def test_final_replaces_short_stream(self) -> None:
