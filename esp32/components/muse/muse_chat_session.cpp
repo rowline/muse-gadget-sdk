@@ -1602,12 +1602,22 @@ static void say(void)
     msg_t &m = s_turn.msgs[s_turn.tts_msg];
     for (int k = 0; k < SAY_READS && xStreamBufferSpacesAvailable(s_out) >= SAY_CHUNK * sizeof(int16_t); k++) {
         size_t n = voice->read(s_pcm16, SAY_CHUNK);
+        if (n == MUSE_TTS_LATER) {
+            return;   /* the next loop asks again */
+        }
         if (!n) {
             voice->end();
+            s_turn.spoken = false;
+            if (s_turn.pcm_out == m.pcm_start) {
+                /* Nothing said after all: shown at reading pace instead. */
+                m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+                s_turn.silent = true;
+                ESP_LOGI(TAG, "%s said nothing: showing message %s", voice->name, m.id);
+                return;
+            }
             m.pcm_frames = s_turn.pcm_out - m.pcm_start;
             m.tts = TTS_FINISHED;
             s_turn.tts_msg = -1;
-            s_turn.spoken = false;
             return;
         }
         if (s_turn.gen == s_gen.load()) {

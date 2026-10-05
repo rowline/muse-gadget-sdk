@@ -39,11 +39,16 @@ typedef struct {
      * maybe cut short mid-character. False if it can't; the message is shown
      * unspoken. */
     bool (*begin)(const char *text);
-    /* Up to cap more samples, 16 kHz mono; 0 once it has all been said. */
+    /* Up to cap more samples, 16 kHz mono; MUSE_TTS_LATER if none are ready
+     * yet (a voice synthesized elsewhere, still on its way); 0 once it has
+     * all been said. A voice that ends without a sample leaves the message
+     * to be shown. */
     size_t (*read)(int16_t *pcm, size_t cap);
     /* Stops, whether or not it has all been said. */
     void (*end)(void);
 } muse_tts_t;
+
+#define MUSE_TTS_LATER ((size_t)-1)
 
 void muse_tts_register(const muse_tts_t *tts);
 
