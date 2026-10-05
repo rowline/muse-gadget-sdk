@@ -173,6 +173,8 @@ static char s_wifi_ssid[33] = "test-wifi", s_register_req_id[40];
 static const char *s_node_id = "test-node", *s_display_name = "Test device";
 static void copy_wifi_ssid(char *out, size_t size) { snprintf(out, size, "%s", s_wifi_ssid); }
 static void make_uuid(char *out, size_t size) { snprintf(out, size, "test-request"); }
+/* The wrapper project's hook (gadget_platform.h), as a host linker needs it: adds nothing. */
+__attribute__((weak)) void muse_gadget_platform_add_commands(cJSON *commands) { (void)commands; }
 ''' + functions + '''
 int main(void) {
     for (int on = 0; on <= 1; on++) {

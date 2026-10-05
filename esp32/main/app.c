@@ -60,6 +60,7 @@
 #include "link_pairing.h"
 #include "bug_report.h"
 #include "diagnostic_log.h"
+#include "gadget_platform.h"
 #if CONFIG_HOMEHUB_VOICE
 #include "voice.h"
 #endif
@@ -1961,6 +1962,15 @@ static cJSON *on_ws_command(
         return async;
     }
 #endif
+
+#if CONFIG_MUSE_ENABLED
+    cJSON *muse_result = muse_glue_command(command, params, request_id, session_generation);
+    if (muse_result) return muse_result;
+#endif
+    if (muse_gadget_platform_command) {
+        cJSON *platform_result = muse_gadget_platform_command(command, params);
+        if (platform_result) return platform_result;
+    }
 
     char msg[128];
     snprintf(msg, sizeof(msg), "unsupported command: %s", command);

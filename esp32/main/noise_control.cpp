@@ -40,10 +40,12 @@
 extern "C" {
 #include "cJSON.h"
 #include "camera.h"
+#include "gadget_platform.h"
 #include "led_status.h"
 #include "ota.h"
 #if CONFIG_MUSE_ENABLED
 extern "C" {
+#include "muse_glue.h"
 #include "muse_state.h"
 }
 #endif
@@ -1209,6 +1211,25 @@ static void add_command(cJSON *commands, const char *name,
     cJSON_AddItemToObject(commands, name, command);
 }
 
+extern "C" void noise_ctrl_add_command(cJSON *commands, const char *name,
+                                       const char *description, cJSON *required,
+                                       cJSON *optional, int timeout_ms) {
+    add_command(commands, name, description, required, optional);
+    if (timeout_ms > 0) {
+        cJSON_AddNumberToObject(cJSON_GetObjectItem(commands, name), "timeout_ms",
+                                timeout_ms);
+    }
+}
+
+extern "C" cJSON *noise_ctrl_param(const char *type, const char *description) {
+    cJSON *param = cJSON_CreateObject();
+    cJSON_AddStringToObject(param, "type", type);
+    if (description) {
+        cJSON_AddStringToObject(param, "description", description);
+    }
+    return param;
+}
+
 static void add_register_metadata_string(cJSON **metadata, cJSON *params,
                                          const char *key,
                                          const char *value) {
@@ -1386,15 +1407,23 @@ static char *build_register_json(void) {
                     ota_required, ota_optional);
     }
 
+#if CONFIG_MUSE_ENABLED
+    muse_glue_add_commands(commands);
+#endif
+    if (muse_gadget_platform_add_commands) {
+        muse_gadget_platform_add_commands(commands);
+    }
+
     cJSON_AddItemToObject(params, "commands_v2", commands);
     cJSON_AddItemToObject(root, "params", params);
 
     // cJSON_PrintUnformatted grows its buffer by doubling, holding the old
     // one each time, so ~2 KB of JSON briefly needs ~6 KB of byte-addressable
     // heap. Right after the handshake there is often not that much, so print
-    // into one buffer sized to fit instead.
+    // into one buffer sized to fit instead. The UI's and a platform's commands
+    // take a Muse build's register past 4 KB.
     char *json = nullptr;
-    for (int size = 2048; size <= 8192 && !json; size += 512) {
+    for (int size = 2048; size <= 12288 && !json; size += 512) {
         json = (char *)malloc(size);
         if (!json) break;
         if (!cJSON_PrintPreallocated(root, json, size, false)) {

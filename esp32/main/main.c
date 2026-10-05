@@ -17,14 +17,10 @@
 #include "app.h"
 #include "esp_log.h"
 #include "diagnostic_log.h"
+#include "gadget_platform.h"
 #if CONFIG_MUSE_ENABLED
 #include "muse_glue.h"
 #endif
-
-// Optional platform start-up, linked in by a wrapper project that hosts this
-// firmware (for example ESP-Mosaico's Vibe Mode services). Runs before Wi-Fi,
-// BLE and the UI start; leave it undefined on stand-alone boards.
-void muse_gadget_platform_start(void) __attribute__((weak));
 
 void app_main(void) {
 #if CONFIG_HOMEHUB_SUPPORT_BUG_REPORT

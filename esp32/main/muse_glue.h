@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include "cJSON.h"
 #include "led_status.h"
+#include "noise_control.h"
 
 // Runs the UI (components/muse) on top of Home Link: Link owns Wi-Fi, BLE,
 // setup credentials and the Hatch account; the UI is the avatar, voice and
@@ -30,3 +32,14 @@ void muse_glue_storage_ready(void);
 void muse_glue_link_ready(void);
 // The LED backend for Muse builds: Link's status, shown on the display.
 void muse_glue_led_state(led_state_t state);
+
+// Home Link commands for the UI: the board's voice (voice.say, and
+// voice.configure where Link's own voice isn't built), the caption
+// (display.show_text) and the screen's settings (display.configure).
+// add_commands() advertises them in the register; command() runs one,
+// returning its result, an {"_async": true} object for one that reports
+// later, or NULL for a command that isn't Muse's.
+void muse_glue_add_commands(cJSON *commands);
+cJSON *muse_glue_command(const char *command, cJSON *params,
+                         const char *request_id,
+                         noise_ctrl_session_generation_t session_generation);

@@ -51,10 +51,9 @@ void muse_hatch_wav_header(uint8_t h[MUSE_HATCH_WAV_HEADER], uint32_t rate);
 /* Writes 4 characters per 3 bytes of `in`, padded; returns the length. */
 size_t muse_hatch_base64(const uint8_t *in, size_t n, char *out);
 
-/* Caption text (muse_chat_text.c): the last line or so of `src`, and the page
- * of wrapped lines holding byte `at` of `text` (false if there's no text). */
+/* Caption text (muse_chat_text.c): the last line or so of `src`. The page
+ * holding a byte of a text is muse_hatch_caption_at() in muse_chat.h. */
 void muse_hatch_tail_words(const char *src, char *out, size_t cap);
-bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

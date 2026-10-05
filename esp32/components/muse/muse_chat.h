@@ -105,6 +105,9 @@ muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap);
  * page. False until there's reply text to page.
  */
 bool muse_hatch_turn_caption(size_t played, char *out, size_t cap);
+/* The page of `text` wrapped to the screen (muse_state_page) that holds byte
+ * `at`, for a caption paced to speech or reading; false if there's no text. */
+bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
 
 /* Reply speech as 16 kHz mono. Waits up to wait_ms for some; returns frames read. */
 size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms);

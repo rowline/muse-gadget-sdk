@@ -16,9 +16,12 @@
 
 #include "muse_glue.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
@@ -38,10 +41,13 @@
 
 #include "muse_ble.h"
 #include "muse_board.h"
+#include "muse_chat.h"
 #include "muse_link.h"
 #include "muse_mem.h"
 #include "muse_settings.h"
 #include "muse_state.h"
+#include "muse_tts.h"
+#include "muse_voice.h"
 
 static const char *TAG = "link.muse";
 
@@ -679,4 +685,256 @@ void muse_glue_led_state(led_state_t state) {
     muse_link_set_state(st);
     // Pairing, provisioning and unpair all move the LED; pick up their config.
     keeper_kick(KEEP_RELOAD);
+}
+
+// ---- Home Link commands ------------------------------------------------------
+
+#define SAY_TIMEOUT_MS 120000   // a full-length text at speech pace, with margin
+#define SLEEP_MAX_S 3600        // muse_settings' limit
+
+static cJSON *command_fail(const char *code, const char *message) {
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", false);
+    cJSON *error = cJSON_AddObjectToObject(result, "error");
+    cJSON_AddStringToObject(error, "code", code);
+    cJSON_AddStringToObject(error, "message", message);
+    return result;
+}
+
+// Optional integer parameter: false with *why set if it's there but wrong.
+static bool int_param(cJSON *params, const char *name, int lo, int hi, int *out,
+                      bool *given, const char **why, char *buf, size_t cap) {
+    cJSON *item = params ? cJSON_GetObjectItem(params, name) : NULL;
+    *given = item != NULL;
+    if (!item) return true;
+    if (!cJSON_IsNumber(item) || item->valueint < lo || item->valueint > hi) {
+        snprintf(buf, cap, "%s must be %d-%d", name, lo, hi);
+        *why = buf;
+        return false;
+    }
+    *out = item->valueint;
+    return true;
+}
+
+static bool bool_param(cJSON *params, const char *name, bool *out, bool *given,
+                       const char **why, char *buf, size_t cap) {
+    cJSON *item = params ? cJSON_GetObjectItem(params, name) : NULL;
+    *given = item != NULL;
+    if (!item) return true;
+    if (!cJSON_IsBool(item)) {
+        snprintf(buf, cap, "%s must be true or false", name);
+        *why = buf;
+        return false;
+    }
+    *out = cJSON_IsTrue(item);
+    return true;
+}
+
+static const char *text_param(cJSON *params, size_t max, cJSON **fail) {
+    cJSON *text = params ? cJSON_GetObjectItem(params, "text") : NULL;
+    if (!cJSON_IsString(text) || !text->valuestring || !text->valuestring[0]) {
+        *fail = command_fail("missing_param", "text is required");
+        return NULL;
+    }
+    if (strlen(text->valuestring) >= max) {
+        char why[64];
+        snprintf(why, sizeof(why), "text is too long: up to %u bytes", (unsigned)(max - 1));
+        *fail = command_fail("invalid_params", why);
+        return NULL;
+    }
+    return text->valuestring;
+}
+
+typedef struct {
+    noise_ctrl_session_generation_t session_generation;
+    char request_id[64];
+} say_ctx_t;
+
+// From the voice task, once the text has been said or shown.
+static void said(bool spoken, bool interrupted, void *arg) {
+    say_ctx_t *ctx = arg;
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddBoolToObject(payload, "spoken", spoken);
+    cJSON_AddBoolToObject(payload, "interrupted", interrupted);
+    if (!spoken) {
+        cJSON_AddStringToObject(payload, "shown_because",
+                                muse_settings_speaker_on() ? "the voice had nothing to say for this text"
+                                                           : "the speaker is off");
+    }
+    noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
+    free(ctx);
+}
+
+static cJSON *say_command(cJSON *params, const char *request_id,
+                          noise_ctrl_session_generation_t session_generation) {
+    cJSON *fail = NULL;
+    const char *text = text_param(params, MUSE_VOICE_SAY_MAX, &fail);
+    if (!text) return fail;
+    say_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) return command_fail("out_of_memory", "failed to allocate");
+    ctx->session_generation = session_generation;
+    strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
+    esp_err_t err = muse_voice_say(text, said, ctx);
+    if (err != ESP_OK) {
+        free(ctx);
+        if (err == ESP_ERR_INVALID_STATE) {
+            return command_fail("busy", "still saying the last text: try again when it's done");
+        }
+        return command_fail("internal", esp_err_to_name(err));
+    }
+    cJSON *async = cJSON_CreateObject();
+    cJSON_AddBoolToObject(async, "_async", true);
+    return async;
+}
+
+static cJSON *show_text_command(cJSON *params) {
+    cJSON *fail = NULL;
+    const char *text = text_param(params, MUSE_CAPTION_MAX, &fail);
+    if (!text) return fail;
+    EXT_RAM_BSS_ATTR static char page[MUSE_CAPTION_MAX];
+    if (!muse_hatch_caption_at(text, 0, page, sizeof(page))) {
+        return command_fail("invalid_params", "nothing to show");
+    }
+    muse_state_set_asleep(false);
+    muse_state_set_caption("%s", page);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddBoolToObject(payload, "whole", strlen(page) >= strlen(text));
+    return result;
+}
+
+static cJSON *display_configure_command(cJSON *params) {
+    int brightness = 0, sleep_s = 0;
+    bool awake = false, has_brightness, has_sleep, has_awake;
+    const char *why = NULL;
+    char buf[64];
+    if (!int_param(params, "brightness", 10, 100, &brightness, &has_brightness, &why, buf, sizeof(buf))
+        || !int_param(params, "sleep_s", 0, SLEEP_MAX_S, &sleep_s, &has_sleep, &why, buf, sizeof(buf))
+        || !bool_param(params, "awake", &awake, &has_awake, &why, buf, sizeof(buf))) {
+        return command_fail("invalid_params", why);
+    }
+    if (has_brightness) muse_settings_set_brightness(brightness);
+    if (has_sleep) muse_settings_set_sleep_s(sleep_s);
+    if (has_awake) muse_state_set_asleep(!awake);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddNumberToObject(payload, "brightness", muse_settings_brightness());
+    cJSON_AddNumberToObject(payload, "sleep_s", muse_settings_sleep_s());
+    cJSON_AddBoolToObject(payload, "awake", !muse_state_asleep());
+    return result;
+}
+
+#if !CONFIG_HOMEHUB_VOICE
+static cJSON *voice_configure_command(cJSON *params) {
+    int volume = 0;
+    bool speaker = false, has_volume, has_speaker;
+    const char *why = NULL;
+    char buf[64];
+    if (!int_param(params, "volume", 0, 100, &volume, &has_volume, &why, buf, sizeof(buf))
+        || !bool_param(params, "speaker", &speaker, &has_speaker, &why, buf, sizeof(buf))) {
+        return command_fail("invalid_params", why);
+    }
+    if (has_volume) muse_settings_set_volume(volume);
+    if (has_speaker) muse_settings_set_speaker_on(speaker);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddNumberToObject(payload, "volume", muse_settings_volume());
+    cJSON_AddBoolToObject(payload, "speaker", muse_settings_speaker_on());
+    return result;
+}
+#endif
+
+void muse_glue_add_commands(cJSON *commands) {
+    const muse_tts_t *voice = muse_tts_get();
+    if (voice) {
+        char description[512];
+        snprintf(description, sizeof(description),
+                 "Say text aloud through the gadget's speaker in its own voice (%s), "
+                 "showing the words on screen as they are spoken. Replies to the user's "
+                 "voice notes are already spoken, so use this to speak up unprompted: an "
+                 "announcement, a reminder, or an answer to something asked elsewhere. "
+                 "With the speaker off in the gadget's settings the text is shown "
+                 "instead. A press of the talk button cuts it short. Returns once it "
+                 "has been said.",
+                 voice->name);
+        cJSON *required = cJSON_CreateObject();
+        cJSON_AddItemToObject(required, "text",
+                              noise_ctrl_param("string",
+                                               "What to say, as plain text: up to 1023 bytes of UTF-8, "
+                                               "about 300 Chinese characters or 150 English words. "
+                                               "Markdown, emoji and links are not read out."));
+        noise_ctrl_add_command(commands, "voice.say", description, required, NULL, SAY_TIMEOUT_MS);
+    }
+#if !CONFIG_HOMEHUB_VOICE
+    {
+        cJSON *optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(optional, "volume",
+                              noise_ctrl_param("integer", "Speaker volume, 0 to 100."));
+        cJSON_AddItemToObject(optional, "speaker",
+                              noise_ctrl_param("boolean",
+                                               "Speaker on (true) or off (false); off, replies and "
+                                               "voice.say are shown as text."));
+        noise_ctrl_add_command(commands, "voice.configure",
+                               "Set the speaker's volume or turn it on or off; both are kept "
+                               "across restarts. Without parameters, reports the current settings.",
+                               NULL, optional, 0);
+    }
+#endif
+    {
+        int cols = 0, lines = 0;
+        muse_state_page(&cols, &lines);
+        char description[300];
+        if (cols > 0 && lines > 0) {
+            snprintf(description, sizeof(description),
+                     "Show a short message on the screen without speaking, in place of the "
+                     "caption: the first page of it, %d columns by %d lines (a Chinese "
+                     "character takes two columns). It stays until a reply, a greeting or "
+                     "another message replaces it.",
+                     cols, lines);
+        } else {
+            snprintf(description, sizeof(description),
+                     "Show a short message on the screen without speaking, in place of the "
+                     "caption: the first few lines of it. It stays until a reply, a greeting "
+                     "or another message replaces it.");
+        }
+        cJSON *required = cJSON_CreateObject();
+        cJSON_AddItemToObject(required, "text", noise_ctrl_param("string", "The message, plain text."));
+        noise_ctrl_add_command(commands, "display.show_text", description, required, NULL, 0);
+    }
+    {
+        cJSON *optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(optional, "brightness",
+                              noise_ctrl_param("integer", "Screen brightness, 10 to 100 percent."));
+        cJSON_AddItemToObject(optional, "sleep_s",
+                              noise_ctrl_param("integer",
+                                               "Seconds of idleness before the screen turns itself "
+                                               "off, 0 to 3600; 0 keeps it on."));
+        cJSON_AddItemToObject(optional, "awake",
+                              noise_ctrl_param("boolean",
+                                               "true turns the screen on now, false turns it off."));
+        noise_ctrl_add_command(commands, "display.configure",
+                               "Adjust the screen: brightness, how long before it turns itself "
+                               "off, or turn it on or off now. Brightness and the sleep time are "
+                               "kept across restarts. Without parameters, reports the current values.",
+                               NULL, optional, 0);
+    }
+}
+
+cJSON *muse_glue_command(const char *command, cJSON *params, const char *request_id,
+                         noise_ctrl_session_generation_t session_generation) {
+    if (strcmp(command, "voice.say") == 0) {
+        if (!muse_tts_get()) return command_fail("unsupported", "this gadget has no voice");
+        return say_command(params, request_id, session_generation);
+    }
+    if (strcmp(command, "display.show_text") == 0) return show_text_command(params);
+    if (strcmp(command, "display.configure") == 0) return display_configure_command(params);
+#if !CONFIG_HOMEHUB_VOICE
+    if (strcmp(command, "voice.configure") == 0) return voice_configure_command(params);
+#endif
+    return NULL;
 }

@@ -61,6 +61,17 @@ void noise_ctrl_init(const char *node_id, const char *display_name,
 
 void noise_ctrl_set_command_cb(noise_ctrl_command_cb cb);
 
+// Adds a command to the register's commands_v2 object, for the UI and platform
+// hooks that extend the firmware's own set: required and optional map each
+// parameter's name to noise_ctrl_param() (NULL: none), and timeout_ms is how
+// long the server waits for the result (0: its default).
+void noise_ctrl_add_command(cJSON *commands, const char *name,
+                            const char *description, cJSON *required,
+                            cJSON *optional, int timeout_ms);
+// A parameter description for noise_ctrl_add_command(): "string", "integer",
+// "boolean".
+cJSON *noise_ctrl_param(const char *type, const char *description);
+
 // Called from the session task with the agent's name (GET /identity) once per
 // Noise session, shortly after the device registers.
 typedef void (*noise_ctrl_agent_name_cb)(const char *name);

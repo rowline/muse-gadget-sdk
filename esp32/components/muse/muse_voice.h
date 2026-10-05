@@ -44,6 +44,20 @@ void muse_voice_request_loopback(void);
 /* Bench test: decodes and plays a built-in MP3 reply. */
 void muse_voice_request_mp3test(void);
 
+/*
+ * Says `text` in the board's voice (muse_tts) the next time the turn loop is
+ * idle, its pages as the caption, as a reply is said: for Home Link's
+ * voice.say. With the speaker off or no speech, the text is shown at reading
+ * pace instead. A talk press cuts it short and starts a note. `done` is
+ * called from the voice task once it's over, with whether any speech played
+ * and whether a press interrupted it. One at a time: ESP_ERR_INVALID_STATE
+ * while another waits, ESP_ERR_INVALID_SIZE for an empty text or one of
+ * MUSE_VOICE_SAY_MAX bytes or more, ESP_ERR_NO_MEM without room to copy it.
+ */
+#define MUSE_VOICE_SAY_MAX 1024
+typedef void (*muse_voice_said_cb_t)(bool spoken, bool interrupted, void *ctx);
+esp_err_t muse_voice_say(const char *text, muse_voice_said_cb_t done, void *ctx);
+
 /* Asleep with nothing to play: codecs off, Wi-Fi dozing. */
 bool muse_voice_resting(void);
 

@@ -37,6 +37,7 @@
 #include "muse_mem.h"
 #include "muse_settings.h"
 #include "muse_state.h"
+#include "muse_tts.h"
 #include "muse_wifi.h"
 
 static const char *TAG = "muse_voice";
@@ -63,6 +64,9 @@ static const char *TAG = "muse_voice";
 #define HELD_TRIES 8                            /* then a saved note is dropped */
 #define HELD_POLL_MS 5000                       /* resting with notes saved: check for Wi-Fi this often */
 #define HELD_KEEP_US (30LL * 60 * 1000000)      /* muse_voice_notes_waiting() */
+#define SAY_BYTES_PER_S 14                      /* speech pace for the caption, as the chat session guesses it */
+#define SHOW_BYTES_PER_S 16                     /* reading pace, with the speaker off */
+#define SHOW_HOLD_MS 2000                       /* the last page stays up this long */
 #define RETRY_MIN_US (15LL * 1000000)
 #define RETRY_MAX_US (120LL * 1000000)
 #define STALL_US (30LL * 1000000)               /* Hatch took none of a note this long: give up */
@@ -74,6 +78,16 @@ static volatile float s_monitor_db = -100.0f;
 static volatile bool s_chirp;
 static volatile bool s_loopback;
 static volatile bool s_mp3test;
+
+/* Text waiting for muse_voice_say(), and whom to tell once it's said. */
+typedef struct {
+    char *text;   /* in PSRAM; NULL: nothing waiting */
+    muse_voice_said_cb_t done;
+    void *ctx;
+} say_req_t;
+
+static say_req_t s_say;
+static portMUX_TYPE s_say_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /*
  * Pre-roll: while idle the mic keeps running into this ring, so a recording
@@ -782,6 +796,116 @@ static bool can_record(void)
     return true;
 }
 
+static bool say_waiting(void)
+{
+    portENTER_CRITICAL(&s_say_lock);
+    bool waiting = s_say.text != NULL;
+    portEXIT_CRITICAL(&s_say_lock);
+    return waiting;
+}
+
+/* The caption page for byte `at` of `text`, if there is one. */
+static void show_page(const char *text, size_t at, char *page, size_t cap)
+{
+    if (muse_hatch_caption_at(text, at, page, cap)) {
+        muse_state_set_caption("%s", page);
+    }
+}
+
+/*
+ * Says the waiting text (muse_voice_say) as a reply is said, or with the
+ * speaker off or no speech shows it at reading pace, then tells the caller.
+ * Returns true if a talk press cut it short: the press is taken, so the
+ * caller records a note as after an interrupted reply.
+ */
+static bool say_waiting_text(void)
+{
+    portENTER_CRITICAL(&s_say_lock);
+    say_req_t req = s_say;
+    s_say.text = NULL;
+    portEXIT_CRITICAL(&s_say_lock);
+
+    EXT_RAM_BSS_ATTR static char page[MUSE_CAPTION_MAX];
+    static int16_t buf[MUSE_AUDIO_CHUNK];
+    static const int16_t silence[MUSE_AUDIO_CHUNK];
+    size_t len = strlen(req.text);
+    const muse_tts_t *voice = muse_tts_get();
+    bool spoken = false, interrupted = false;
+    size_t played = 0;
+    int64_t t0 = esp_timer_get_time();
+
+    muse_state_set_asleep(false);   /* the screen shows the words */
+    show_page(req.text, 0, page, sizeof(page));
+    if (voice && muse_settings_speaker_on() && voice->begin(req.text)) {
+        ESP_LOGI(TAG, "saying %u bytes in %s", (unsigned)len, voice->name);
+        for (;;) {
+            if (got_event(MUSE_PTT_DOWN)) {
+                interrupted = true;
+                break;
+            }
+            size_t n = voice->read(buf, MUSE_AUDIO_CHUNK);
+            if (n == MUSE_TTS_LATER) {
+                /* On its way from elsewhere; once sounding, keep the speaker fed. */
+                if (spoken) {
+                    muse_audio_write(silence, MUSE_AUDIO_CHUNK);
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+                continue;
+            }
+            if (!n) {
+                break;
+            }
+            if (!spoken) {
+                spoken = true;
+                muse_state_set_mode(MUSE_MODE_SPEAKING);
+                ESP_LOGI(TAG, "speech after %.2fs", (esp_timer_get_time() - t0) / 1e6);
+            }
+            muse_state_set_level(muse_audio_level(buf, n));
+            muse_audio_write(buf, n);
+            played += n;
+            size_t at = (size_t)((uint64_t)played * SAY_BYTES_PER_S / MUSE_AUDIO_RATE);
+            show_page(req.text, at < len ? at : len - 1, page, sizeof(page));
+        }
+        voice->end();
+        muse_state_set_level(0);
+    } else if (voice) {
+        ESP_LOGI(TAG, "%s: showing %u bytes", muse_settings_speaker_on() ? "nothing to say" : "speaker off", (unsigned)len);
+    }
+    if (!interrupted) {
+        /* Unspoken, the pages turn at reading pace; either way the last stays up a moment. */
+        int64_t shown = esp_timer_get_time();
+        int64_t hold_ms = SHOW_HOLD_MS + (spoken ? 0 : (int64_t)len * 1000 / SHOW_BYTES_PER_S);
+        while ((esp_timer_get_time() - shown) / 1000 < hold_ms) {
+            if (got_event(MUSE_PTT_DOWN)) {
+                interrupted = true;
+                break;
+            }
+            if (spoken) {
+                muse_audio_write(silence, MUSE_AUDIO_CHUNK);   /* no stale DMA replay */
+            } else {
+                size_t at = (size_t)((esp_timer_get_time() - shown) / 1000 * SHOW_BYTES_PER_S / 1000);
+                show_page(req.text, at < len ? at : len - 1, page, sizeof(page));
+                muse_state_poke();
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+        }
+    }
+    ESP_LOGI(TAG, "said %.2fs of speech in %.2fs%s", (double)played / MUSE_AUDIO_RATE,
+             (esp_timer_get_time() - t0) / 1e6, interrupted ? " (interrupted)" : "");
+    if (spoken) {
+        muse_state_make_happy();
+    }
+    if (!interrupted) {
+        go_idle("");
+    }
+    if (req.done) {
+        req.done(spoken, interrupted, req.ctx);
+    }
+    free(req.text);
+    return interrupted;
+}
+
 static void voice_task(void *arg)
 {
     bool pending_down = false;
@@ -792,7 +916,7 @@ static void voice_task(void *arg)
             muse_input_event_t ev;
             bool asleep = muse_state_asleep();
             bool battery = muse_state_on_battery();
-            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback;
+            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback && !say_waiting();
 #if HOLD_NOTES
             /* A press goes first: send_held() leaves it queued and returns
              * without backing off, so retrying before it's read would spin. */
@@ -817,6 +941,12 @@ static void voice_task(void *arg)
                  * polling (the timeout is only a backstop, or a look for
                  * Wi-Fi to send saved notes), so the CPU can stay asleep. */
                 muse_state_wait_awake(s_waiting ? HELD_POLL_MS : REST_BACKSTOP_MS);
+                continue;
+            }
+            if (say_waiting()) {
+                /* A press that cuts it short records a note, as after a reply. */
+                pending_down = say_waiting_text();
+                pre_reset();
                 continue;
             }
             if (s_chirp) {
@@ -927,6 +1057,31 @@ void muse_voice_request_mp3test(void)
 {
     s_mp3test = true;
     muse_state_nudge();
+}
+
+esp_err_t muse_voice_say(const char *text, muse_voice_said_cb_t done, void *ctx)
+{
+    size_t len = text ? strlen(text) : 0;
+    if (!len || len >= MUSE_VOICE_SAY_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    char *copy = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(copy, text, len + 1);
+    portENTER_CRITICAL(&s_say_lock);
+    bool busy = s_say.text != NULL;
+    if (!busy) {
+        s_say = (say_req_t){ .text = copy, .done = done, .ctx = ctx };
+    }
+    portEXIT_CRITICAL(&s_say_lock);
+    if (busy) {
+        free(copy);
+        return ESP_ERR_INVALID_STATE;
+    }
+    muse_state_nudge();   /* out of a rest, if it was in one */
+    return ESP_OK;
 }
 
 bool muse_voice_resting(void)
